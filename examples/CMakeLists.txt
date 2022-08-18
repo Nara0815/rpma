@@ -113,6 +113,12 @@ function(add_example)
 	endif()
 endfunction()
 
+add_example(NAME hash BIN hashserver
+	SRCS hash/hashserver.c)
+add_example(NAME hash BIN hashclient
+	SRCS hash/hashclient.c)
+	add_example(NAME hash BIN testhash
+	SRCS hash/testhash.c)
 add_example(NAME template BIN template
 	SRCS template-example/template-example.c)
 add_example(NAME 01-connection BIN server
