@@ -4,17 +4,20 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-/* Initial size of buckets.  2 to the power of this value will be allocated. */
-#define HOPSCOTCH_INIT_BSIZE_EXPONENT   21 // 2097152 buckets
+/* Initial size of the hopscotch table. 2^ TABLE_SIZE buckets allocated. */
+#define TABLE_SIZE   21 // 2097152 buckets
 /* Bitmap size used for linear probing in hopscotch hashing */
-#define HOPSCOTCH_HOPINFO_SIZE          32
+#define HOP_NUMBER   32
+
+#define SEED    0x12345678
+
 
 /*
  * Buckets
  */
 struct hopscotch_bucket {
-    void *key;
-    void *data;
+    char *key;
+    char *data;
     uint32_t hopinfo;
 } __attribute__ ((aligned (8)));
 
@@ -27,6 +30,36 @@ struct hopscotch_hash_table {
     struct hopscotch_bucket *buckets;
     int _allocated;
 };
+
+/*
+* Murmur hash
+*/
+uint32_t MurmurOAAT_32(const char* str, uint32_t h)
+{
+    // One-byte-at-a-time hash based on Murmur's mix
+    // Source: https://github.com/aappleby/smhasher/blob/master/src/Hashes.cpp
+    for (; *str; ++str) {
+        h ^= *str;
+        h *= 0x5bd1e995;
+        h ^= h >> 15;
+    }
+    return h;
+}
+
+/* djb2 hash
+*/
+uint32_t
+djhash(uint8_t *str)
+{
+    uint32_t hash = 5381;
+    int c;
+
+    while (c = *str++)
+        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+
+    return hash;
+}
+
 
 /*
  * Jenkins Hash Function
@@ -60,7 +93,7 @@ hopscotch_init(struct hopscotch_hash_table *ht, size_t keylen)
     struct hopscotch_bucket *buckets;
 
     /* Allocate buckets first */
-    exponent = HOPSCOTCH_INIT_BSIZE_EXPONENT;
+    exponent = TABLE_SIZE;
     buckets = malloc(sizeof(struct hopscotch_bucket) * (1 << exponent));
     if ( NULL == buckets ) {
         return NULL;
@@ -100,7 +133,7 @@ hopscotch_release(struct hopscotch_hash_table *ht)
  * Lookup
  */
 void *
-hopscotch_lookup(struct hopscotch_hash_table *ht, void *key)
+hopscotch_lookup(struct hopscotch_hash_table *ht, char *key)
 {
     uint32_t h;
     size_t idx;
@@ -108,16 +141,26 @@ hopscotch_lookup(struct hopscotch_hash_table *ht, void *key)
     size_t sz;
 
     sz = 1ULL << ht->exponent;
+    //h = MurmurOAAT_32(key, SEED);
     h = _jenkins_hash(key, ht->keylen);
     idx = h & (sz - 1);
+
+    
+    //printf("%s----%lu----%lu---%lu\n", key, (unsigned long)h, (unsigned long)idx, ht->buckets[idx].hopinfo);
 
     if ( !ht->buckets[idx].hopinfo ) {
         return NULL;
     }
-    for ( i = 0; i < HOPSCOTCH_HOPINFO_SIZE; i++ ) {
+
+    
+    for ( i = 0; i < HOP_NUMBER; i++ ) {
         if ( ht->buckets[idx].hopinfo & (1 << i) ) {
             if ( 0 == memcmp(key, ht->buckets[idx + i].key, ht->keylen) ) {
                 /* Found */
+
+              //  printf("%s----%s---%d--%lu---%lu---%lu\n", key,ht->buckets[idx + i].key, i, (unsigned long)h, (unsigned long)idx, ht->buckets[idx].hopinfo);
+
+ 
                 return ht->buckets[idx + i].data;
             }
         }
@@ -130,7 +173,7 @@ hopscotch_lookup(struct hopscotch_hash_table *ht, void *key)
  * Insert an entry to the hash table
  */
 int
-hopscotch_insert(struct hopscotch_hash_table *ht, void *key, void *data)
+hopscotch_insert(struct hopscotch_hash_table *ht, char *key, char *data)
 {
     uint32_t h;
     size_t idx;
@@ -142,19 +185,24 @@ hopscotch_insert(struct hopscotch_hash_table *ht, void *key, void *data)
     /* Ensure the key does not exist.  Duplicate keys are not allowed. */
     if ( NULL != hopscotch_lookup(ht, key) ) {
         /* The key already exists. */
-        return -1;
+        //printf("the key exisats");
+        return -2;
     }
 
     sz = 1ULL << ht->exponent;
+    //h = hash(key);
+    //h = MurmurOAAT_32(key, SEED);
     h = _jenkins_hash(key, ht->keylen);
     idx = h & (sz - 1);
+
+   // printf("%lu---------%lu\n", (unsigned long)h, (unsigned long)idx);
 
     /* Linear probing to find an empty bucket */
     for ( i = idx; i < sz; i++ ) {
         if ( NULL == ht->buckets[i].key ) {
             /* Found an available bucket */
-            while ( i - idx >= HOPSCOTCH_HOPINFO_SIZE ) {
-                for ( j = 1; j < HOPSCOTCH_HOPINFO_SIZE; j++ ) {
+            while ( i - idx >= HOP_NUMBER ) {
+                for ( j = 1; j < HOP_NUMBER; j++ ) {
                     if ( ht->buckets[i - j].hopinfo ) {
                         off = __builtin_ctz(ht->buckets[i - j].hopinfo);
                         if ( off >= j ) {
@@ -170,8 +218,9 @@ hopscotch_insert(struct hopscotch_hash_table *ht, void *key, void *data)
                         break;
                     }
                 }
-                if ( j >= HOPSCOTCH_HOPINFO_SIZE ) {
-                    return -1;
+                if ( j >= HOP_NUMBER ) {
+                    //TODO: resize table;
+                    return -3;
                 }
             }
 
@@ -179,6 +228,12 @@ hopscotch_insert(struct hopscotch_hash_table *ht, void *key, void *data)
             ht->buckets[i].key = key;
             ht->buckets[i].data = data;
             ht->buckets[idx].hopinfo |= (1ULL << off);
+
+            if(ht->buckets[idx].hopinfo>32){
+                //printf("off %lu\n", off);
+                //printf("hopionfo %lu\n", ht->buckets[idx].hopinfo);
+                return -4;
+            }
 
             return 0;
         }
@@ -191,13 +246,13 @@ hopscotch_insert(struct hopscotch_hash_table *ht, void *key, void *data)
  * Remove an item
  */
 void *
-hopscotch_remove(struct hopscotch_hash_table *ht, void *key)
+hopscotch_remove(struct hopscotch_hash_table *ht, char *key)
 {
     uint32_t h;
     size_t idx;
     size_t i;
     size_t sz;
-    void *data;
+    char *data;
 
     sz = 1ULL << ht->exponent;
     h = _jenkins_hash(key, ht->keylen);
@@ -206,7 +261,7 @@ hopscotch_remove(struct hopscotch_hash_table *ht, void *key)
     if ( !ht->buckets[idx].hopinfo ) {
         return NULL;
     }
-    for ( i = 0; i < HOPSCOTCH_HOPINFO_SIZE; i++ ) {
+    for ( i = 0; i < HOP_NUMBER; i++ ) {
         if ( ht->buckets[idx].hopinfo & (1 << i) ) {
             if ( 0 == memcmp(key, ht->buckets[idx + i].key, ht->keylen) ) {
                 /* Found */
@@ -265,23 +320,5 @@ hopscotch_resize(struct hopscotch_hash_table *ht, int delta)
 
     return 0;
 }
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-    /* in hopscotch.c */
-    struct hopscotch_hash_table *
-    hopscotch_init(struct hopscotch_hash_table *, size_t);
-    void hopscotch_release(struct hopscotch_hash_table *);
-    void * hopscotch_lookup(struct hopscotch_hash_table *, void *);
-    int hopscotch_insert(struct hopscotch_hash_table *, void *, void *);
-    void * hopscotch_remove(struct hopscotch_hash_table *, void *);
-    int hopscotch_resize(struct hopscotch_hash_table *, int);
-
-#ifdef __cplusplus
-}
-#endif
-
 
 #endif /* _HOPSCOTCH_H */

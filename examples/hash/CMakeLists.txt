@@ -40,4 +40,5 @@ link_directories(${LIBRPMA_LIBRARY_DIRS})
 
 add_example_with_pmem(hashserver hashserver.c ../common/common-conn.c)
 add_example_with_pmem(hashclient hashclient.c ../common/common-conn.c)
-add_example(testhash testhash.c)
+add_example(writehash writehash.c)
+add_example(readhash readhash.c)
