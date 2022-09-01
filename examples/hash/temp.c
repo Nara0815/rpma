@@ -6,7 +6,6 @@
  * client.c -- a client that fetches hashtable parts from servers
  *
  */
-
 #include "hopscotch.h"
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -33,10 +32,11 @@
 #define TABLE_SIZE   21 // 2097152 buckets
 #define HOP_NUMBER   32
 
+
 #ifdef USE_PMEM
-#define USAGE_STR "usage: %s <server_address> <port> [<pmem-path>]\n"PMEM_USAGE
+#define USAGE_STR "usage: %s  [<pmem-path>]\n"PMEM_USAGE
 #else
-#define USAGE_STR "usage: %s <server_address> <port>\n"
+#define USAGE_STR "usage: %s\n"
 #endif /* USE_PMEM */
 
 int
@@ -44,7 +44,7 @@ main(int argc, char *argv[])
 {
 	/* validate parameters */
 	if (argc < 2) {
-		fprintf(stderr, USAGE_STR, argv[0]);
+		fprintf(stderr, "usage: %s load-file", argv[0]);
 		exit(-1);
 	}
 
@@ -52,7 +52,35 @@ main(int argc, char *argv[])
     char *path;
     path = argv[1];
 
-    /*memory buffer for keys from parsed file*/
+	/* configure logging thresholds to see more details */
+	rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
+	rpma_log_set_threshold(RPMA_LOG_THRESHOLD_AUX, RPMA_LOG_LEVEL_INFO);
+
+	/* parameters for machine 16*/
+	char *addr = "192.168.101.16";
+	char *port = "7777";
+	int ret;
+	size_t src_size;
+
+	/* resources - general */
+	struct rpma_peer *peer = NULL;
+	struct rpma_conn *conn = NULL;
+	struct ibv_wc wc;
+
+	/*
+	 * resources - memory regions:
+	 * - src_* - a remote one which is a source for the read
+	 * - dst_* - a local, volatile one which is a destination for the read
+	 */
+	struct rpma_mr_local *dst_mr = NULL;
+	struct rpma_mr_remote *src_mr = NULL;
+	//size_t src_size = 0;
+
+	/*memory buffer for read destination*/
+	void *dst_ptr = NULL; 
+
+
+	/*memory buffer for keys from parsed file*/
     char line[MAX_LINE_LENGTH] = {0};
     unsigned int line_count = 0;
    
@@ -60,6 +88,7 @@ main(int argc, char *argv[])
     const char s[2] = " "; 
     char *token = " ";
     char *keys[KEY_NUMBERS] = {};
+
 
 	/*Hash parameters*/
 
@@ -71,21 +100,19 @@ main(int argc, char *argv[])
     int valsize = 27;
     int hopsize = 4;
     int metasize = 1;
-	int metadata_size = 5;
-    char hopdest[4];
-    //char key[keylen];
     char *valid = {'1'};
-	char meta[] = "0";
-	char metadata[5];
-	char key[keylen];
-	uint32_t h;
+	char meta[1] = {};
+	sz = 1ULL << TABLE_SIZE;
+
+
+    /*Hash parameters*/
+    uint32_t h;
     size_t idx;
     size_t i;
     size_t k;
     uint32_t hopinfo;
-	sz = 1ULL << TABLE_SIZE;
-	size_t index = 0;
-
+    char hopdest[4];
+    char key[keylen];
 
     /* Open file */
     FILE *file = fopen(path, "r");
@@ -112,34 +139,6 @@ main(int argc, char *argv[])
         line_count++;
     }
 
-
-	/* configure logging thresholds to see more details */
-	rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
-	rpma_log_set_threshold(RPMA_LOG_THRESHOLD_AUX, RPMA_LOG_LEVEL_INFO);
-
-	/* parameters for machine 16*/
-	char *addr = "192.168.101.16";
-	char *port = "7777";
-	int ret;
-
-
-	/* resources - general */
-	struct rpma_peer *peer = NULL;
-	struct rpma_conn *conn = NULL;
-	struct ibv_wc wc;
-
-	/*
-	 * resources - memory regions:
-	 * - src_* - a remote one which is a source for the read
-	 * - dst_* - a local, volatile one which is a destination for the read
-	 */
-	struct rpma_mr_local *dst_mr = NULL;
-	struct rpma_mr_remote *src_mr = NULL;
-	//size_t src_size = 0;
-
-	/*memory buffer for read destination*/
-	void *dst_ptr = NULL; 
-
 	/*
 	 * lookup an ibv_context via the address and create a new peer using it
 	 */
@@ -155,7 +154,7 @@ main(int argc, char *argv[])
 	}
 
 	/* register the memory */
-	ret = rpma_mr_reg(peer, dst_ptr, 2*KILOBYTE, RPMA_MR_USAGE_READ_DST,
+	ret = rpma_mr_reg(peer, dst_ptr, KILOBYTE, RPMA_MR_USAGE_READ_DST,
 				&dst_mr);
 	if (ret)
 		goto err_mr_free;
@@ -189,29 +188,106 @@ main(int argc, char *argv[])
 		goto err_conn_disconnect;
 
 	/* get the remote memory region size */
+	/*ret = rpma_mr_remote_get_size(src_mr, &src_size);
+	if (ret) {
+		goto err_mr_remote_delete;
+	} else if (src_size > 2*KILOBYTE) {
+		fprintf(stderr,
+				"Remote memory region size too big to reading to the sink buffer of the assumed size (%zu > %d)\n",
+				src_size, 2*KILOBYTE);
+		goto err_mr_remote_delete;
+	}*/
 
 
+    /*Compute hash and post RDMA read operation*/
+k=1;
+    //for(k = 0; k < 10; k++){
 
- 
-
-    for(k = 0; k < 10; k++){
         /*Compute hashcode of key and retrieve segment from PMEM*/
 
         h = _jenkins_hash(keys[k], keylen);
 
         idx = h & (sz - 1);
-		printf("%s----%lu--\n", keys[k], (unsigned long)idx);
+
+        //printf("%s----%lu--\n", keys[k], (unsigned long)idx);
 
 		/* post an RDMA read operation */
-		ret = rpma_read(conn, dst_mr, 0, src_mr, idx*64, 2*KILOBYTE,
+		//ret = rpma_read(conn, dst_mr, 0, src_mr, src_data->data_offset+idx*64, 2*KILOBYTE,
+			//RPMA_F_COMPLETION_ALWAYS, NULL);
+
+		ret = rpma_read(conn, dst_mr, 0, src_mr, src_data->data_offset, 2*KILOBYTE,
 			RPMA_F_COMPLETION_ALWAYS, NULL);
+
 		if (ret)
 			goto err_mr_remote_delete;
 
 
+(void) fprintf(stdout, "Read a message: %s\n", *((char *)dst_ptr+1));
+       
+        printf( "Read message: %s\n", meta);
+
+        //Checking if bucket empty
+        if ( valid == (char *)dst_ptr) {
+ 	
+        //Get hopinfo
+            memcpy(&hopdest, (char *)&dst_ptr + metasize, hopsize);
+            hopinfo = atoi(hopdest);
 
 
-    /*Completion queue to correctly receive ordered chars
+     /* 
+      * If hopinfo equals to 1, return current bucket, else traverse through keys
+      */
+
+            if(hopinfo == 1){
+                //Return current bucket
+                
+				memcpy(&key, (char *)&dst_ptr + metasize + hopsize, keylen);
+                //memcpy(&key, &addr[idx*64 + metasize + hopsize], keylen);
+
+                printf("%s\n", key);
+                //return...
+
+            }else{
+            
+                for ( i = 0; i < HOP_NUMBER; i++ ) {
+                    if ( hopinfo & (1 << i) ) {
+                        
+						memcpy(&key, (char *)&dst_ptr + metasize + hopsize + i*64, keylen);
+                        //memcpy(&key, &addr[(idx+i)*64 + metasize + hopsize], keylen);
+
+                        if ( 0 == memcmp(keys[k], key, keylen-4) ) {
+                        /* Found */
+                        
+                        //printf("found");
+                        //printf("%s----%d\n", key, i);
+                        //return ht->buckets[idx + i].data;
+                        }
+                    }
+                } 
+            }
+
+        } else{
+        //Key not found if bucket is empty
+            printf("Not found\n");
+        //return NULL;
+        }
+    //}
+
+    
+
+	/* post an RDMA read operation */
+	/*ret = rpma_read(conn, dst_mr, 0, src_mr, src_data->data_offset, KILOBYTE,
+			RPMA_F_COMPLETION_ALWAYS, NULL);
+	if (ret)
+		goto err_mr_remote_delete;
+
+    (void) fprintf(stdout, "Read message: %s\n", (char *)dst_ptr);*/
+
+
+
+
+
+
 	/* get the connection's main CQ */
 	struct rpma_cq *cq = NULL;
 	ret = rpma_conn_get_cq(conn, &cq);
@@ -243,84 +319,6 @@ main(int argc, char *argv[])
 		goto err_mr_remote_delete;
 	}
 
-
-		/*for(int i=0; i<64; i++){
-			
-			
-			printf( "Read message meta: %c\n", ((char *)dst_ptr)[i]);
-
-  
-		}*/
-	
-		for(int i=0; i<metadata_size; i++){
-			
-			metadata[i] = ((char *)dst_ptr)[i];
-			//printf( "Read message meta: %c\n", metadata[i]);
-
-    //(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
-		}
-
-		 if ( valid == metadata[0]) {
-
-        //Get hopinfo
-            memcpy(&hopdest, &metadata[1], hopsize);
-            hopinfo = atoi(hopdest);
-
-		 
-     /* 
-      * If hopinfo equals to 1, return current bucket, else traverse through keys
-      */
-
-            if(hopinfo == 1){
-                //Return current bucket
-
-				for(int i=0; i<keylen; i++){
-
-                   
-			
-					key[i] = ((char *)dst_ptr)[metasize+hopsize+i];
-					//printf( "Read message meta: %c\n", key[i]);
-
-    				//(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
-				}
-                
-
-                //printf("%s\n", key);
-                //return...
-
-            }else{
-            
-                for ( i = 0; i < HOP_NUMBER; i++ ) {
-                    if ( hopinfo & (1 << i) ) {
-
-						for(int j=0; j<keylen; j++){
-			
-							key[j] = ((char *)dst_ptr)[metasize+hopsize+i*64+j];
-
-						}         
-
-
-                        if ( 0 == memcmp(keys[k], key, keylen-4) ) {
-                        /* Found */
-						//printf("%s\n", key);
-                        
-                        //printf("found");
-                        //printf("%s----%d\n", key, i);
-                        //return ht->buckets[idx + i].data;
-                        }
-                    }
-                } 
-            }
-
-        } else{
-        //Key not found if bucket is empty
-            printf("Not found\n");
-        //return NULL;
-        }
-    }
-
-
-
 	/*read from here*/
 
 	//(void) fprintf(stdout, "Read message: %s\n", (char *)dst_ptr);
@@ -343,6 +341,13 @@ err_mr_free:
 err_peer_delete:
 	/* delete the peer */
 	(void) rpma_peer_delete(&peer);
+
+    /* Close file */
+    if (fclose(file))
+    {
+        perror(path);
+        exit(1);
+    }
 
 	return ret;
 }
