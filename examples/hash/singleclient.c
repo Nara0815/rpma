@@ -42,45 +42,18 @@
 #define USAGE_STR "usage: %s <server_address> <port>\n"
 #endif /* USE_PMEM */
 
-void swap(int* xp, int* yp)
-{
-    int temp = *xp;
-    *xp = *yp;
-    *yp = temp;
-}
- 
-// Function to perform Selection Sort
-void selectionSort(int arr[], int n)
-{
-    int i, j, min_idx;
- 
-    // One by one move boundary of unsorted subarray
-    for (i = 0; i < n - 1; i++) {
- 
-        // Find the minimum element in unsorted array
-        min_idx = i;
-        for (j = i + 1; j < n; j++)
-            if (arr[j] < arr[min_idx])
-                min_idx = j;
- 
-        // Swap the found minimum element
-        // with the first element
-        swap(&arr[min_idx], &arr[i]);
-    }
-}
-
 int
 main(int argc, char *argv[])
 {
 	/* validate parameters */
-	if (argc < 1) {
+	if (argc < 2) {
 		fprintf(stderr, USAGE_STR, argv[0]);
 		exit(-1);
 	}
 
     /*YCSB trace key file*/ 
     char *path;
-    path = "/home/nara/trace/c-load-1.0";
+    path = argv[1];
 
     /*memory buffer for keys from parsed file*/
     char line[MAX_LINE_LENGTH] = {0};
@@ -90,8 +63,6 @@ main(int argc, char *argv[])
     const char s[2] = " "; 
     char *token = " ";
     char *keys[KEY_NUMBERS] = {};
-	//int time[KEY_NUMBERS];
-	int *time = malloc(KEY_NUMBERS * sizeof *time);
 
 	/*Hash parameters*/
 
@@ -152,7 +123,7 @@ main(int argc, char *argv[])
 
 	/* parameters for machine 16*/
 	char *addr = "192.168.101.16";
-	char *port = "8004";
+	char *port = "7778";
 	int ret;
 
 
@@ -223,39 +194,28 @@ main(int argc, char *argv[])
 
 	/* get the remote memory region size */
 
-struct timeval stop, start;
 
-//gettimeofday(&start, NULL);
-    for(k = 0; k < 100; k++){
+
+ 
+struct timeval stop, start;
+gettimeofday(&start, NULL);
+    for(k = 0; k < KEY_NUMBERS; k++){
         /*Compute hashcode of key and retrieve segment from PMEM*/
 
-		//printf("jee");
-
-        gettimeofday(&start, NULL);
         h = _jenkins_hash(keys[k], keylen);
 
         idx = h & (sz - 1);
 		//printf("%s----%lu--\n", keys[k], (unsigned long)idx);
 
-        gettimeofday(&stop, NULL);
-
-		printf("took hash %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
 		/* post an RDMA read operation */
-		
-
-        gettimeofday(&start, NULL);
-
 		ret = rpma_read(conn, dst_mr, 0, src_mr, idx*64, 2*KILOBYTE,
 			RPMA_F_COMPLETION_ALWAYS, NULL);
 		if (ret)
 			goto err_mr_remote_delete;
 
-  gettimeofday(&stop, NULL);
 
-		printf("took read %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-	
 
-        gettimeofday(&start, NULL);
+
     /*Completion queue to correctly receive ordered chars
 	/* get the connection's main CQ */
 	struct rpma_cq *cq = NULL;
@@ -288,10 +248,6 @@ struct timeval stop, start;
 		goto err_mr_remote_delete;
 	}
 
-gettimeofday(&stop, NULL);
-
-		printf("took complete %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-	
 
 		/*for(int i=0; i<64; i++){
 			
@@ -300,8 +256,7 @@ gettimeofday(&stop, NULL);
 
   
 		}*/
-		
-        gettimeofday(&start, NULL);
+	
 		for(int i=0; i<metadata_size; i++){
 			
 			metadata[i] = ((char *)dst_ptr)[i];
@@ -367,22 +322,14 @@ gettimeofday(&stop, NULL);
             printf("Not found\n");
         //return NULL;
         }
-		gettimeofday(&stop, NULL);
-
-		printf("took find %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-	
-		//time[k] = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec; 
-		//printf("took %lu for %d\n", time[k], k);
     }
 
-//gettimeofday(&stop, NULL);
-//printf("took %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-//printf("took %lu us per query\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec)/KEY_NUMBERS); 
+gettimeofday(&stop, NULL);
+printf("took %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
+printf("took %lu us per query\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec)/KEY_NUMBERS); 
 
-printf("Dine");
- selectionSort(time, KEY_NUMBERS);
 
-printf("took %lu", time[990000]);
+
 	/*read from here*/
 
 	//(void) fprintf(stdout, "Read message: %s\n", (char *)dst_ptr);

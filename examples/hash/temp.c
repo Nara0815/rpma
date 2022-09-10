@@ -215,15 +215,29 @@ k=1;
 		//ret = rpma_read(conn, dst_mr, 0, src_mr, src_data->data_offset+idx*64, 2*KILOBYTE,
 			//RPMA_F_COMPLETION_ALWAYS, NULL);
 
+
+            	ret = rpma_read(conn, dst_mr, 0, src_mr, 108399744, 2*KILOBYTE,
+			RPMA_F_COMPLETION_ALWAYS, NULL);
+	if (ret)
+		goto err_mr_remote_delete;
+
+		for(int i=0; i< 10; i++){
+			
+
+    (void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
+		}
+
 		ret = rpma_read(conn, dst_mr, 0, src_mr, src_data->data_offset, 2*KILOBYTE,
 			RPMA_F_COMPLETION_ALWAYS, NULL);
 
 		if (ret)
 			goto err_mr_remote_delete;
 
+    (void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
 
-(void) fprintf(stdout, "Read a message: %s\n", *((char *)dst_ptr+1));
-       
+(void) fprintf(stdout, "Read a message: %s\n", (char *)dst_ptr);
+        memcpy(&meta, (char *)&dst_ptr, metasize);
+
         printf( "Read message: %s\n", meta);
 
         //Checking if bucket empty
