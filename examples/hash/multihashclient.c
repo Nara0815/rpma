@@ -1,9 +1,5 @@
-// SPDX-License-Identifier: BSD-3-Clause
-/* Copyright 2020-2021, Intel Corporation */
-/* Copyright 2021-2022, Fujitsu */
-
 /*
- * client.c -- a client that fetches hashtable parts from servers
+ * multihashclient.c -- a multithreaded client that fetches hashtable parts from servers
  *
  */
 
@@ -42,9 +38,9 @@
 
 
 #ifdef USE_PMEM
-#define USAGE_STR "usage: %s <server_address> <port> [<pmem-path>]\n"PMEM_USAGE
+#define USAGE_STR "usage: %s <keysfile_path> <server_count> <server_address> <port> [<pmem-path>]\n"PMEM_USAGE
 #else
-#define USAGE_STR "usage: %s <server_address> <port>\n"
+#define USAGE_STR "usage: %s <keysfile_path> <server_count> <server_address> <port>\n"
 #endif /* USE_PMEM */
 
 atomic_int cnt;
@@ -97,15 +93,7 @@ void *thr_func(void *arg)
 	end = data->end;
     int ret;
     struct ibv_wc wc;
-    //printf("hello from thr_func, thread id: %d\n", tid*threadgroup);
-    //printf(" %s\n", keys[tid*threadgroup+1]);
-   
-   	//struct rpma_mr_local *dst_mr = NULL;
 
-	//size_t src_size = 0;
-
-	/*memory buffer for read destination*/
-	//void *dst_ptr = NULL; 
 
    	/* allocate a memory */
 	dst_ptr = malloc_aligned(2*KILOBYTE);
@@ -116,8 +104,6 @@ void *thr_func(void *arg)
 	}
 
 
-
-
 	/* register the memory */
 	ret = rpma_mr_reg(peer, dst_ptr, 2*KILOBYTE, RPMA_MR_USAGE_READ_DST,
 				&dst_mr);
@@ -125,7 +111,7 @@ void *thr_func(void *arg)
 		printf("dddlol");
 		return NULL;}
 
- for(k = start; k < end; k++){
+ 	for(k = start; k < end; k++){
         /*Compute hashcode of key and retrieve segment from PMEM*/
 
         h = _jenkins_hash(keys[k], keylen);
@@ -139,141 +125,123 @@ void *thr_func(void *arg)
 			RPMA_F_COMPLETION_ALWAYS, NULL);
 		if (ret){
 			printf("read fail");
+			(void) rpma_mr_remote_delete(&src_mr);
 			pthread_exit(NULL);
 		}
 
-		
+	
+
+    	/*Completion queue to correctly receive ordered chars
+		/* get the connection's main CQ */
+		struct rpma_cq *cq = NULL;
+		ret = rpma_conn_get_cq(conn, &cq);
+		if (ret){printf("read fail");
+			pthread_exit(NULL);}
 			//(void) rpma_mr_remote_delete(&src_mr);
 
+			/* wait for the completion to be ready */
+			ret = rpma_cq_wait(cq);
+			if (ret){
+				printf("read fail");
+				(void) rpma_mr_remote_delete(&src_mr);
+				pthread_exit(NULL);
+		    }
+		
+			/* wait for a completion of the RDMA read */
+			ret = rpma_cq_get_wc(cq, 1, &wc, NULL);
+			if (ret){
+				printf("read fail");
+				(void) rpma_mr_remote_delete(&src_mr);
+				pthread_exit(NULL);
+		    }
 
-    /*Completion queue to correctly receive ordered chars
-	/* get the connection's main CQ */
-	struct rpma_cq *cq = NULL;
-	ret = rpma_conn_get_cq(conn, &cq);
-	if (ret){printf("read fail");
-		pthread_exit(NULL);}
-		//(void) rpma_mr_remote_delete(&src_mr);
-
-	/* wait for the completion to be ready */
-	ret = rpma_cq_wait(cq);
-	if (ret){printf("read fail");
-		pthread_exit(NULL);}
-		//(void) rpma_mr_remote_delete(&src_mr);
-
-	/* wait for a completion of the RDMA read */
-	ret = rpma_cq_get_wc(cq, 1, &wc, NULL);
-	if (ret){printf("read fail");
-		pthread_exit(NULL);}
-		//(void) rpma_mr_remote_delete(&src_mr);
-
-	if (wc.status != IBV_WC_SUCCESS) {
-		ret = -1;
-		(void) fprintf(stderr, "rpma_read() failed: %s\n",
+			if (wc.status != IBV_WC_SUCCESS) {
+				ret = -1;
+				(void) fprintf(stderr, "rpma_read() failed: %s\n",
 				ibv_wc_status_str(wc.status));
-		(void) rpma_mr_remote_delete(&src_mr);
-	}
+				(void) rpma_mr_remote_delete(&src_mr);
+			}
 
-	if (wc.opcode != IBV_WC_RDMA_READ) {
-		ret = -1;
-		(void) fprintf(stderr,
+			if (wc.opcode != IBV_WC_RDMA_READ) {
+				ret = -1;
+				(void) fprintf(stderr,
 				"unexpected wc.opcode value (%d != %d)\n",
 				wc.opcode, IBV_WC_RDMA_READ);
-		(void) rpma_mr_remote_delete(&src_mr);
-	}
+				(void) rpma_mr_remote_delete(&src_mr);
+			}
 
 
-		/*for(int i=0; i<64; i++){
-			
+			/*for(int i=0; i<64; i++){
 			
 			printf( "Read message meta: %c\n", ((char *)dst_ptr)[i]);
 
-  
-		}*/
+			}*/
 
 		
 	
-		for(int i=0; i<metadata_size; i++){
+			for(int i=0; i<metadata_size; i++){
 			
-			metadata[i] = ((char *)dst_ptr)[i];
-			//printf( "Read message meta: %c\n", metadata[i]);
-
-    //(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
-		}
+				metadata[i] = ((char *)dst_ptr)[i];
+				//printf( "Read message meta: %c\n", metadata[i]);
+    			//(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
+			}
 
 		
 
-		if ( valid == metadata[0]) {
+			if ( valid == metadata[0]) {
 
-        //Get hopinfo
-            memcpy(&hopdest, &metadata[1], hopsize);
-            hopinfo = atoi(hopdest);
+        	//Get hopinfo
+            	memcpy(&hopdest, &metadata[1], hopsize);
+            	hopinfo = atoi(hopdest);
 
-		 
-     /* 
-      * If hopinfo equals to 1, return current bucket, else traverse through keys
-      */
+     		/* 
+      		 * If hopinfo equals to 1, return current bucket, else traverse through keys
+      		*/
 
-            if(hopinfo == 1){
-                //Return current bucket
+            	if(hopinfo == 1){
+                	//Return current bucket
 
-				for(int i=0; i<keylen; i++){
-
-                   
+					for(int i=0; i<keylen; i++){
 			
-					key[i] = ((char *)dst_ptr)[metasize+hopsize+i];
-					//printf( "Read message meta: %c\n", key[i]);
+						key[i] = ((char *)dst_ptr)[metasize+hopsize+i];
+						//printf( "Read message meta: %c\n", key[i]);
+    					//(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
+					}
 
-    				//(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
-				}
+					cnt++;
 
-				cnt++;
-				//printf("The atomic counter is %u\n", cnt);
-                
-//printf("found %s-%d-%d\n", key, tid, k);
-                //printf("%s\n", key);
-                //return...
-
-            }else{
+            	}else{
             
-                for ( i = 0; i < HOP_NUMBER; i++ ) {
-                    if ( hopinfo & (1 << i) ) {
+                	for ( i = 0; i < HOP_NUMBER; i++ ) {
+                    	if ( hopinfo & (1 << i) ) {
 
-						for(int j=0; j<keylen; j++){
+							for(int j=0; j<keylen; j++){
 			
-							key[j] = ((char *)dst_ptr)[metasize+hopsize+i*64+j];
+								key[j] = ((char *)dst_ptr)[metasize+hopsize+i*64+j];
 
-						}         
+							}         
 
+                        	if ( 0 == memcmp(keys[k], key, keylen-4) ) {
+                        	/* Found */
+							//printf("found %s-%d-%d\n", key, tid, k);
+							cnt++;
+                        	//return ht->buckets[idx + i].data;
+                        	}
+                    	}
+                	} 
+            	}
 
-                        if ( 0 == memcmp(keys[k], key, keylen-4) ) {
-                        /* Found */
-				//printf("found %s-%d-%d\n", key, tid, k);
-						cnt++;
-						//printf("The atomic counter is %u\n", cnt);
-                        
-                        //printf("found");
-                        //printf("%s----%d\n", key, i);
-                        //return ht->buckets[idx + i].data;
-                        }
-                    }
-                } 
-            }
+        	} else{
+        	//Key not found if bucket is empty
+            	printf("Not found\n");
+            	return NULL;
+        	}
+    	}
 
-        } else{
-        //Key not found if bucket is empty
-            printf("Not found\n");
-            return NULL;
-        }
-    }
-
-	//(void) rpma_mr_dereg(&dst_mr);
-
-
-	free(dst_ptr);
-	//printf("before exit%d\n", tid);
-
-    return NULL;
+		free(dst_ptr);
+    	return NULL;
 }
+
 
 
 int
@@ -281,14 +249,14 @@ main(int argc, char *argv[])
 {
 
 	/* validate parameters */
-	if (argc < 1) {
+	if (argc < 4) {
 		fprintf(stderr, USAGE_STR, argv[0]);
 		exit(-1);
 	}
 
     /*YCSB trace key file*/ 
     char *path;
-    path = "/home/nara/trace/c-load-1.0";
+    path = argv[1];
 
     /*memory buffer for keys from parsed file*/
     char line[MAX_LINE_LENGTH] = {0};
@@ -311,7 +279,6 @@ main(int argc, char *argv[])
     int metasize = 1;
 	int metadata_size = 5;
     char hopdest[4];
-    //char key[keylen];
     char *valid = {'1'};
 	char meta[] = "0";
 	char metadata[5];
@@ -352,8 +319,6 @@ main(int argc, char *argv[])
 
         keys[line_count] = strdup(token);
 
-      //  ret = hopscotch_insert(ht, value, value);
-        //printf("line[%06d]: %s\n", line_count, keys[line_count]);
         line_count++;
     }
 
@@ -362,9 +327,15 @@ main(int argc, char *argv[])
 	rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
 	rpma_log_set_threshold(RPMA_LOG_THRESHOLD_AUX, RPMA_LOG_LEVEL_INFO);
 
-	/* parameters for machine 16*/
-	char *addr = "192.168.101.16";
-	char *port = "8004";
+  
+	/* parameters for machines*/
+	int numservers = argv[2];
+	char *addr = argv[3];
+	char *port = argv[4];
+	/* parameters for machines*/
+	char *addr1 = argv[5];
+	char *port1 = argv[6];
+
 	int ret;
 
 
@@ -422,8 +393,6 @@ main(int argc, char *argv[])
 	if (ret)
 		goto err_conn_disconnect;
 
-    struct timeval stop, start;
-    gettimeofday(&start, NULL);
     /*Create threads*/
     int rc;
     for (int i = 0; i < NUM_THREADS; ++i) {
@@ -442,26 +411,12 @@ main(int argc, char *argv[])
       		return EXIT_FAILURE;
     	}
     }
-	printf("ye");
+
   	/* block until all threads complete */
   	for (i = 0; i < NUM_THREADS; ++i) {
     	pthread_join(thr[i], NULL);
   	}
-printf("ddd");
-	gettimeofday(&stop, NULL);
 
-printf("ddd");
-
-
-printf("took %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-printf("took %lu us per query\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec)/cnt); 
-
-printf("The atomic counter is %u\n", cnt);
-
-
-	/*read from here*/
-
-	//(void) fprintf(stdout, "Read message: %s\n", (char *)dst_ptr);
 
 err_mr_remote_delete:
 	/* delete the remote memory region's structure */

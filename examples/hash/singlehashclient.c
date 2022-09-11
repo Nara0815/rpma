@@ -3,7 +3,7 @@
 /* Copyright 2021-2022, Fujitsu */
 
 /*
- * client.c -- a client that fetches hashtable parts from servers
+ * singlehashclient.c -- a client that fetches hashtable parts from servers, single threaded
  *
  */
 
@@ -37,50 +37,23 @@
 #define HOP_NUMBER   32
 
 #ifdef USE_PMEM
-#define USAGE_STR "usage: %s <server_address> <port> [<pmem-path>]\n"PMEM_USAGE
+#define USAGE_STR "usage: %s <keysfile_path> <server_address> <port> [<pmem-path>]\n"PMEM_USAGE
 #else
 #define USAGE_STR "usage: %s <server_address> <port>\n"
 #endif /* USE_PMEM */
-
-void swap(int* xp, int* yp)
-{
-    int temp = *xp;
-    *xp = *yp;
-    *yp = temp;
-}
- 
-// Function to perform Selection Sort
-void selectionSort(int arr[], int n)
-{
-    int i, j, min_idx;
- 
-    // One by one move boundary of unsorted subarray
-    for (i = 0; i < n - 1; i++) {
- 
-        // Find the minimum element in unsorted array
-        min_idx = i;
-        for (j = i + 1; j < n; j++)
-            if (arr[j] < arr[min_idx])
-                min_idx = j;
- 
-        // Swap the found minimum element
-        // with the first element
-        swap(&arr[min_idx], &arr[i]);
-    }
-}
 
 int
 main(int argc, char *argv[])
 {
 	/* validate parameters */
-	if (argc < 1) {
+	if (argc < 4) {
 		fprintf(stderr, USAGE_STR, argv[0]);
 		exit(-1);
 	}
 
     /*YCSB trace key file*/ 
     char *path;
-    path = "/home/nara/trace/c-load-1.0";
+    path = argv[1];
 
     /*memory buffer for keys from parsed file*/
     char line[MAX_LINE_LENGTH] = {0};
@@ -90,8 +63,6 @@ main(int argc, char *argv[])
     const char s[2] = " "; 
     char *token = " ";
     char *keys[KEY_NUMBERS] = {};
-	//int time[KEY_NUMBERS];
-	int *time = malloc(KEY_NUMBERS * sizeof *time);
 
 	/*Hash parameters*/
 
@@ -150,9 +121,9 @@ main(int argc, char *argv[])
 	rpma_log_set_threshold(RPMA_LOG_THRESHOLD, RPMA_LOG_LEVEL_INFO);
 	rpma_log_set_threshold(RPMA_LOG_THRESHOLD_AUX, RPMA_LOG_LEVEL_INFO);
 
-	/* parameters for machine 16*/
-	char *addr = "192.168.101.16";
-	char *port = "8004";
+	/* parameters for remote machine*/
+	char *addr = argv[2];;
+	char *port = argv[3];;
 	int ret;
 
 
@@ -223,118 +194,87 @@ main(int argc, char *argv[])
 
 	/* get the remote memory region size */
 
-struct timeval stop, start;
+ 
 
-//gettimeofday(&start, NULL);
-    for(k = 0; k < 100; k++){
+    for(k = 0; k < KEY_NUMBERS; k++){
         /*Compute hashcode of key and retrieve segment from PMEM*/
 
-		//printf("jee");
-
-        gettimeofday(&start, NULL);
         h = _jenkins_hash(keys[k], keylen);
 
         idx = h & (sz - 1);
 		//printf("%s----%lu--\n", keys[k], (unsigned long)idx);
 
-        gettimeofday(&stop, NULL);
-
-		printf("took hash %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
 		/* post an RDMA read operation */
-		
-
-        gettimeofday(&start, NULL);
-
 		ret = rpma_read(conn, dst_mr, 0, src_mr, idx*64, 2*KILOBYTE,
 			RPMA_F_COMPLETION_ALWAYS, NULL);
 		if (ret)
 			goto err_mr_remote_delete;
 
-  gettimeofday(&stop, NULL);
 
-		printf("took read %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-	
+    	/*Completion queue to correctly receive ordered chars
+		/* get the connection's main CQ */
+		struct rpma_cq *cq = NULL;
+		ret = rpma_conn_get_cq(conn, &cq);
+		if (ret)
+			goto err_mr_remote_delete;
 
-        gettimeofday(&start, NULL);
-    /*Completion queue to correctly receive ordered chars
-	/* get the connection's main CQ */
-	struct rpma_cq *cq = NULL;
-	ret = rpma_conn_get_cq(conn, &cq);
-	if (ret)
-		goto err_mr_remote_delete;
+		/* wait for the completion to be ready */
+		ret = rpma_cq_wait(cq);
+		if (ret)
+			goto err_mr_remote_delete;
 
-	/* wait for the completion to be ready */
-	ret = rpma_cq_wait(cq);
-	if (ret)
-		goto err_mr_remote_delete;
+		/* wait for a completion of the RDMA read */
+		ret = rpma_cq_get_wc(cq, 1, &wc, NULL);
+		if (ret)
+			goto err_mr_remote_delete;
 
-	/* wait for a completion of the RDMA read */
-	ret = rpma_cq_get_wc(cq, 1, &wc, NULL);
-	if (ret)
-		goto err_mr_remote_delete;
-
-	if (wc.status != IBV_WC_SUCCESS) {
-		ret = -1;
-		(void) fprintf(stderr, "rpma_read() failed: %s\n",
+		if (wc.status != IBV_WC_SUCCESS) {
+			ret = -1;
+			(void) fprintf(stderr, "rpma_read() failed: %s\n",
 				ibv_wc_status_str(wc.status));
-		goto err_mr_remote_delete;
-	}
+			goto err_mr_remote_delete;
+		}
 
-	if (wc.opcode != IBV_WC_RDMA_READ) {
-		ret = -1;
-		(void) fprintf(stderr,
+		if (wc.opcode != IBV_WC_RDMA_READ) {
+			ret = -1;
+			(void) fprintf(stderr,
 				"unexpected wc.opcode value (%d != %d)\n",
 				wc.opcode, IBV_WC_RDMA_READ);
-		goto err_mr_remote_delete;
-	}
+			goto err_mr_remote_delete;
+		}
 
-gettimeofday(&stop, NULL);
 
-		printf("took complete %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-	
-
-		/*for(int i=0; i<64; i++){
-			
+		/*for(int i=0; i<64; i++){	
 			
 			printf( "Read message meta: %c\n", ((char *)dst_ptr)[i]);
-
   
 		}*/
-		
-        gettimeofday(&start, NULL);
+	
 		for(int i=0; i<metadata_size; i++){
 			
 			metadata[i] = ((char *)dst_ptr)[i];
-			//printf( "Read message meta: %c\n", metadata[i]);
 
-    //(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
 		}
 
-		 if ( valid == metadata[0]) {
+		if ( valid == metadata[0]) {
 
         //Get hopinfo
             memcpy(&hopdest, &metadata[1], hopsize);
             hopinfo = atoi(hopdest);
+ 
+     	/* 
+         * If hopinfo equals to 1, return current bucket, else traverse through keys
+         */
 
-		 
-     /* 
-      * If hopinfo equals to 1, return current bucket, else traverse through keys
-      */
-
-            if(hopinfo == 1){
+           	if(hopinfo == 1){
                 //Return current bucket
 
-				for(int i=0; i<keylen; i++){
-
-                   
+				for(int i=0; i<keylen; i++){       
 			
 					key[i] = ((char *)dst_ptr)[metasize+hopsize+i];
-					//printf( "Read message meta: %c\n", key[i]);
-
-    				//(void) fprintf(stdout, "Read message: %c\n", ((char *)dst_ptr)[i]);
+	
 				}
                 
-
                 //printf("%s\n", key);
                 //return...
 
@@ -349,11 +289,8 @@ gettimeofday(&stop, NULL);
 
 						}         
 
-
                         if ( 0 == memcmp(keys[k], key, keylen-4) ) {
                         /* Found */
-						//printf("%s\n", key);
-                        
                         //printf("found");
                         //printf("%s----%d\n", key, i);
                         //return ht->buckets[idx + i].data;
@@ -367,25 +304,12 @@ gettimeofday(&stop, NULL);
             printf("Not found\n");
         //return NULL;
         }
-		gettimeofday(&stop, NULL);
-
-		printf("took find %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-	
-		//time[k] = (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec; 
-		//printf("took %lu for %d\n", time[k], k);
     }
 
-//gettimeofday(&stop, NULL);
-//printf("took %lu us\n", (stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec); 
-//printf("took %lu us per query\n", ((stop.tv_sec - start.tv_sec) * 1000000 + stop.tv_usec - start.tv_usec)/KEY_NUMBERS); 
 
-printf("Dine");
- selectionSort(time, KEY_NUMBERS);
-
-printf("took %lu", time[990000]);
 	/*read from here*/
 
-	//(void) fprintf(stdout, "Read message: %s\n", (char *)dst_ptr);
+	
 
 err_mr_remote_delete:
 	/* delete the remote memory region's structure */

@@ -117,6 +117,8 @@ add_example(NAME hash BIN hashserver
 	SRCS hash/hashserver.c)
 add_example(NAME hash BIN hashclient
 	SRCS hash/hashclient.c)
+add_example(NAME hash BIN multihashclient
+	SRCS hash/multihashclient.c)
 add_example(NAME hash BIN writehash
 	SRCS hash/writehash.c)
 add_example(NAME hash BIN readhash

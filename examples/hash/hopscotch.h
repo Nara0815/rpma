@@ -1,3 +1,7 @@
+/*
+ * hopscotch.h -- hopscotch hashtable
+ *
+ */
 #ifndef _HOPSCOTCH_H
 #define _HOPSCOTCH_H
 

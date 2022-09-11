@@ -1,5 +1,5 @@
 /*
- * testhash.c -- code to read keys from YCSB trace and lookup from hashtable in pmem 
+ * readhash.c -- code to read keys from YCSB trace and lookup from hashtable in pmem 
  */
 
 #include "hopscotch.h"

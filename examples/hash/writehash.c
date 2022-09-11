@@ -1,5 +1,5 @@
 /*
- * testhash.c -- code to read from YCSB trace and populate the hopscotch hashtable
+ * writehash.c -- code to read from YCSB trace and populate the hopscotch hashtable
  *
  * Write the content of hashtable to pmem
  */

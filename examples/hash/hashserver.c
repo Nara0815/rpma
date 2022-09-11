@@ -2,7 +2,7 @@
 /* Copyright 2020-2021, Intel Corporation */
 
 /*
- * server.c -- a server that contains hashtable
+ * hashserver.c -- a server that contains hashtable
  *
  *  The server acts as one of the endpoints that contain the hashtable in pmem and waits for the client to be connected
  */
@@ -23,7 +23,7 @@
 #endif /* USE_PMEM */
 
 //Per single RDMA read retrieve the whole segment
-#define SEGMENT_SIZE 1024
+#define SEGMENT_SIZE 2048
 
 
 int

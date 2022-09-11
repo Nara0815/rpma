@@ -1,3 +1,7 @@
+/*
+ * hashthread.h -- header file used for passing arguments to thread functions.
+ *
+ */
 #ifndef _HASHTHREAD_H
 #define _HASHTHREAD_H
 
